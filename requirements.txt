@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-dotenv
+torch
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers
+unstructured
+unstructured-inference
+pypdf
+python-docx

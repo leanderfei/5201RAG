@@ -6,10 +6,10 @@ from fastapi.responses import StreamingResponse
 
 from rag import invoke_rag, chat_history
 
-# 创建 FastAPI 实例
+# Create FastAPI application instance
 app = FastAPI()
 
-# 挂载静态文件
+# Mount static files
 app.mount("/static", StaticFiles(directory="templates"))
 
 @app.get("/")

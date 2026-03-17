@@ -9,26 +9,26 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 def format_history(history,max_epoch=3):
-    # 每轮对话有 用户问题 和 助手回复
+    # Each turn includes a user query and an assistant response.
     if len(history) > 2 * max_epoch:
         history = history[-2 * max_epoch :]
     return "\n".join([f"{i['role']}: {i['content']}" for i in history])
 
 def format_docs(docs: list[Document]) -> str:
-    """拼接多个 Document 的 page_content """
+    """Concatenate page_content from multiple Documents."""
     return "\n\n".join(doc.page_content for doc in docs)
 
 def get_retriever(k=20,embedding_model=None):
-    """获取向量数据库的检索器"""
-    # 1、初始化 Chroma 客户端
+    """Get a retriever from the vector database."""
+    # 1) Initialize Chroma client
     vectorstore = Chroma(
         persist_directory="vectorstore",
         embedding_function=embedding_model,
     )
 
-    # 2、创建向量数据库检索器
+    # 2) Create retriever from vector store
     retriever = vectorstore.as_retriever(
-        search_type="similarity", # 检索方式，similarity 或 mmr
+        search_type="similarity", # Retrieval mode: similarity or mmr
         search_kwargs={"k": k},
     )
     
@@ -36,26 +36,28 @@ def get_retriever(k=20,embedding_model=None):
 
 
 def get_llm():
-    # 大模型
+    # LLM
     load_dotenv()
     TONGYI_API_KEY = os.getenv("TONGYI_API_KEY")
     llm = Tongyi(model="qwen-turbo", api_key=TONGYI_API_KEY)
     return llm
 
 def rephrase_retrieve(input:Dict[str,str],llm,retriever):
-    """重述用户query，检索向量数据库"""
+    """Rewrite user query and retrieve from vector database."""
     
-    # 1、重述query的prompt
+    # 1) Prompt for query rewriting
     rephrase_prompt = PromptTemplate.from_template(
     """
-    根据对话历史简要完善最新的用户消息，使其更加具体。只输出完善后的问题。如果问题不需要完善，请直接输出原始问题。
+    Improve the latest user message based on conversation history so it becomes more specific.
+    Output only the improved question.
+    If no improvement is needed, output the original question directly.
     
     {history}
-    用户：{query}
+    User: {query}
     """
     )
     
-    # 2、重述链条：根据历史和当前 query 生成更具体问题
+    # 2) Rephrase chain: generate a more specific query from history + current query
     rephrase_chain = (
         {
             "history": lambda x :format_history(x.get("history")),
@@ -64,37 +66,38 @@ def rephrase_retrieve(input:Dict[str,str],llm,retriever):
         | rephrase_prompt
         | llm
         | StrOutputParser()
-        | (lambda x: print(f"===== 重述后的查询: {x}=====") or x)
+        | (lambda x: print(f"===== Rewritten Query: {x} =====") or x)
     )
     
-    # 3、执行重述
+    # 3) Execute rewrite
     rephrase_query = rephrase_chain.invoke({"history": input.get("history"), "query": input.get("query")})
 
-    # 4、使用重述后的query进行检索
+    # 4) Retrieve with rewritten query
     retrieve_result = retriever.invoke(rephrase_query,k=3)
 
     return retrieve_result
 
 def get_rag_chain(retrieve_result,llm):
-    """构建RAG链条：使用检索结果、历史记录、用户查询，提交大模型生成回复"""
+    """Build RAG chain using retrieved context, history, and user query."""
 
-    # 1、Prompt 模板
+    # 1) Prompt template
     prompt = PromptTemplate(
         input_variables=["context", "history", "query"],
         template="""
-    你是一个专业的中文问答助手，擅长基于提供的资料回答问题。
-    请仅根据以下背景资料以及历史消息回答问题，如无法找到答案，请直接回答“我不知道”。
+    You are a professional academic QA assistant.
+    Answer only based on the provided context and conversation history.
+    If the answer is not available, reply: "I don't know".
 
-    背景资料：{context}
+    Context: {context}
 
-    历史消息：[{history}]
+    History: [{history}]
 
-    问题：{query}
+    Question: {query}
 
-    回答：""",
+    Answer:""",
     )
 
-    # 2、定义 RAG 链条
+    # 2) Define RAG chain
     rag_chain = (
         {
             "context": lambda x:format_docs(retrieve_result),
@@ -102,9 +105,9 @@ def get_rag_chain(retrieve_result,llm):
             "query": lambda x: x.get("query"),
         }
         | prompt
-        | (lambda x: print(x.text, end="") or x) #打印
+        | (lambda x: print(x.text, end="") or x) # Print prompt for debugging
         | llm
-        | StrOutputParser() # 输出解析器，将输出解析为字符串
+        | StrOutputParser() # Parse output into plain string
     )
 
     return rag_chain

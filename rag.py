@@ -3,19 +3,19 @@ import torch
 from langchain_huggingface import HuggingFaceEmbeddings
 from retrieve import rephrase_retrieve, get_rag_chain, get_llm, get_retriever
 
-# 存储对话历史
+# Store conversation history
 chat_history = []
 
-# 1、初始化Embedding模型
+# 1) Initialize embedding model
 embedding_model = HuggingFaceEmbeddings(
     model_name="./bge-base-zh-v1.5",
     model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"},
     encode_kwargs={
         "normalize_embeddings": True
-    }, # 输出归一化向量，更适合余弦相似度计算
+    }, # Output normalized vectors for cosine similarity
 )
 
-# 2、初始化 LLM
+# 2) Initialize LLM
 llm = get_llm()
 
 async def invoke_rag(query,conversation_id,chat_history):
@@ -24,18 +24,18 @@ async def invoke_rag(query,conversation_id,chat_history):
 
     input={"query":query,"history":chat_history}
 
-    # 1、获取检索器
+    # 1) Get retriever
     retriever=get_retriever(k=20,embedding_model=embedding_model)
-    # 2、执行重述、检索
+    # 2) Rewrite query and retrieve
     retrieve_result= rephrase_retrieve(input,llm,retriever)
-    # 3、获取RAG链
+    # 3) Build RAG chain
     rag_chain = get_rag_chain(retrieve_result,llm)
-    # 4、异步执行RAG链，流式输出
+    # 4) Execute RAG chain asynchronously with streaming output
     async for chunk in rag_chain.astream(input):
         answer += chunk
-        yield chunk # 将大模型生成的内容逐块(chunk)地返回给调用者，而不是等待整个回答完成后一次性返回
+        yield chunk # Stream each chunk instead of waiting for the full answer.
 
-    # 5、更新对话历史，添加用户查询和AI回答
+    # 5) Update conversation history with user query and assistant answer
     chat_history.append(
         {"role": "user", "content": query, "conversation_id": conversation_id}
     )
@@ -46,9 +46,12 @@ async def invoke_rag(query,conversation_id,chat_history):
 
 if __name__ == '__main__':
     async def main():
-        query_list = ["不动产或者动产被人占有怎么办", "那要是被损毁了呢"]
+        query_list = [
+            "How is the SpatialTemporal Co-Attention mechanism constructed?",
+            "Which paper uses federated learning, and what benefit does it claim?"
+        ]
         for query in query_list:
-            print(f"===== 查询: {query} =====")
+            print(f"===== Query: {query} =====")
             async for chunk in invoke_rag(query,1,chat_history):
                 print(chunk, end="", flush=True)
 

@@ -10,111 +10,127 @@ from langchain_chroma import Chroma
 import torch
 import re
 import json
+import shutil
+from pathlib import Path
 
 def load_documents():
     """
-    加载多种类型的文档，包括text、markdown、PDF和Word文档
+    Auto-load all supported document types under knowledge_base.
 
     Returns:
-        list: 包含所有加载文档的列表
+        list: A list containing all loaded documents.
     """
-    # 加载文本文件
-    text_documents = TextLoader(
-        "knowledge_base/sample.txt",
-        encoding="utf8"
-    ).load()
+    knowledge_dir = Path("knowledge_base")
+    if not knowledge_dir.exists():
+        raise FileNotFoundError("knowledge_base directory does not exist. Please create it and add documents first.")
 
-    # 加载Markdown文件
-    md_documents = UnstructuredMarkdownLoader(
-        "knowledge_base/sample.md"
-    ).load()
+    supported_suffixes = {".txt", ".md", ".pdf", ".docx"}
+    all_files = sorted(
+        [
+            path for path in knowledge_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in supported_suffixes
+        ]
+    )
 
-    # 加载PDF文件
-    pdf_documents = UnstructuredPDFLoader(
-        "knowledge_base/sample.pdf",
-        mode="elements", # 元素模式
-        strategy="hi_res", # 高分辨率策略
-         # strategy="fast",
-        languages=["eng", "chi_sim"], # 支持的语言：英文和简体中文
-    ).load()
+    if not all_files:
+        raise ValueError("No available files found in knowledge_base (supported: txt/md/pdf/docx).")
 
-    # 加载Word文档
-    word_documents = UnstructuredWordDocumentLoader(
-        "knowledge_base/sample.docx"
-    ).load()
+    documents = []
+    for path in all_files:
+        suffix = path.suffix.lower()
+        if suffix == ".txt":
+            loaded = TextLoader(str(path), encoding="utf8").load()
+        elif suffix == ".md":
+            loaded = UnstructuredMarkdownLoader(str(path)).load()
+        elif suffix == ".pdf":
+            loaded = UnstructuredPDFLoader(
+                str(path),
+                mode="elements",  # Element mode
+                strategy="hi_res",  # High-resolution strategy
+                languages=["eng", "chi_sim"],  # Supports English and Simplified Chinese
+            ).load()
+        else:  # .docx
+            loaded = UnstructuredWordDocumentLoader(str(path)).load()
 
-    # 返回所有文档的列表
-    return text_documents + md_documents + pdf_documents + word_documents
+        documents.extend(loaded)
+
+    print(f"Loaded files: {len(all_files)}, parsed document chunks: {len(documents)}")
+    return documents
 
 def clean_content(documents: list):
 
-    """文本清洗"""
+    """Text cleaning."""
     cleaned_docs = []
 
     for doc in documents:
 
-    # 1、page_content处理：去除多余换行和空格
+    # 1) Process page_content: remove extra newlines and spaces
         text = doc.page_content
 
-        # 将连续的换行符替换为两个换行符，正则表达式模式：r"\n{2,}"
-        # r"" 表示原始字符串（raw string），避免转义字符的特殊处理
-        # \n 表示换行符
-        # {2,} 是量词，表示前面的字符（换行符）出现 2 次或更多次
+        # Replace consecutive newlines with two newlines (regex pattern: r"\n{2,}")
+        # r"" means raw string to avoid escaping issues
+        # \n means newline
+        # {2,} is a quantifier meaning the previous token appears 2 or more times
         text = re.sub(r"\n{2,}", "\n\n", text)
         text = text.strip()
 
-        # 2、metadata处理：将所有非 Chroma 支持类型的值转为 JSON 格式字符串
+        # 2) Process metadata: convert unsupported types to JSON strings for Chroma
         allowed_types = (str, int, float, bool)
         for key, value in doc.metadata.items():
             if not isinstance(value, allowed_types):
                 try:
                     doc.metadata[key] = json.dumps(value, ensure_ascii=False)
                 except (TypeError, ValueError):
-                    # 如果 json.dumps 失败（如包含不可序列化对象），转为 str
+                    # If json.dumps fails (e.g., non-serializable objects), fallback to str
                     doc.metadata[key] = str(value)
 
-        # 3、更新文档内容
+        # 3) Update document content
         doc.page_content = text
         cleaned_docs.append(doc)
 
     return cleaned_docs
 
 def text_split(documents):
-    # 文本分块
+    # Text splitting
     text_splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "。"], # 分隔符列表
-        chunk_size=500, # 每个块的最大长度
-        chunk_overlap=50, # 每个块重叠的长度
+        separators=["\n\n", "。"], # Separator list
+        chunk_size=500, # Maximum length per chunk
+        chunk_overlap=50, # Overlap length between chunks
     )
     texts = text_splitter.split_documents(documents)
     return texts
 
 def save_to_db(texts):
-    # 加载嵌入模型
+    persist_dir = Path("vectorstore")
+    if persist_dir.exists():
+        # To avoid duplicated accumulation across repeated indexing runs, rebuild from scratch.
+        shutil.rmtree(persist_dir)
+
+    # Load embedding model
     embedding_model = HuggingFaceEmbeddings(
         model_name="./bge-base-zh-v1.5",
         model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"},
         encode_kwargs={
             "normalize_embeddings": True
-        }, # 输出归一化向量，更适合余弦相似度计算
+        }, # Output normalized vectors, better for cosine similarity
     )
-    # 嵌入并存储到向量数据库
+    # Embed and store into vector database
     vectorstore = Chroma.from_documents(
-        texts, # 文档列表
-        embedding_model, # 嵌入模型
-        persist_directory="vectorstore", # 存储路径
+        texts, # Document list
+        embedding_model, # Embedding model
+        persist_directory=str(persist_dir), # Storage path
     )
     return vectorstore
 
 if __name__ == '__main__':
-    # 1. 加载文档
+    # 1) Load documents
     documents = load_documents()
-    # 2、清洗文档
+    # 2) Clean documents
     cleaned_docs = clean_content(documents)
-    # 3、切分文档
+    # 3) Split text
     texts = text_split(cleaned_docs)
-    # 4、保存到数据库中
+    # 4) Save to database
     vectorstore = save_to_db(texts)
-    # 5、查看数据库内容
-    print(vectorstore.get().keys()) # 查看所有属性
-    print(vectorstore.get(include=["embeddings"])["embeddings"][:5, :5]) # 查看嵌入向量
+    # 5) Inspect database content
+    print(vectorstore.get().keys()) # Show all fields
+    print(vectorstore.get(include=["embeddings"])["embeddings"][:5, :5]) # Show embedding vectors
