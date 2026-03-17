@@ -1,0 +1,13 @@
+.env
+.accelerate/
+vectorstore/
+bge-base-zh-v1.5/
+__pycache__/
+
+# local model/tool archives and installers
+UnstructuredPDFLoaderx需要/
+*.zip
+*.exe
+
+# python caches
+*.pyc
